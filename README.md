@@ -110,11 +110,11 @@ g++ app/client_main.cpp utils/common_utils.cpp \
     -o client_app \
     -std=c++17 \
     -Iclient -Iutils \
-    -I/usr/local/include \
+    $(pkg-config --cflags opencv4) \
     -L/usr/local/lib \
-    -lopencv_core -lopencv_highgui -lopencv_videoio \
+    $(pkg-config --libs opencv4) \
     -lportaudio \
-    -lpthread -lstdc++
+    -lpthread
 ```
 
 2.  **Compile the Server:**
@@ -126,11 +126,11 @@ g++ app/server_main.cpp utils/common_utils.cpp \
     -o server_app \
     -std=c++17 \
     -Iserver -Iutils \
-    -I/usr/local/include \
+    $(pkg-config --cflags opencv4) \
     -L/usr/local/lib \
-    -lopencv_core -lopencv_highgui -lopencv_videoio \
+    $(pkg-config --libs opencv4) \
     -lportaudio \
-    -lpthread -lstdc++
+    -lpthread
 ```
 
 > **Note:** The `-I/usr/local/include` and `-L/usr/local/lib` flags are common paths for standard installations on Linux. You might need to adjust these if your libraries are installed in different locations.
