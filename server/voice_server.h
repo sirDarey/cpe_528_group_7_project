@@ -6,17 +6,31 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <portaudio.h>
-#include <cstring> // For strlen
+#include <cstring>
 
 #include "common_utils.h"
-#include "server_common.h" // For running, UDP_VOICE_PORT, BUFFER_SIZE
+#include "server_common.h" // running, UDP_VOICE_PORT, BUFFER_SIZE
 
 inline void voiceUDPServer() {
     logInfo("Voice UDP server starting...");
+
     if (Pa_Initialize() != paNoError) {
         logError("Failed to init PortAudio.");
         return;
     }
+
+    // Select first available output device
+    PaDeviceIndex outputDevice = Pa_GetDefaultOutputDevice();
+    const PaDeviceInfo* deviceInfo = nullptr;
+
+    if (outputDevice == paNoDevice) {
+        logError("No default output device found!");
+        Pa_Terminate();
+        return;
+    }
+
+    deviceInfo = Pa_GetDeviceInfo(outputDevice);
+    logInfo("Using audio output device: " + std::string(deviceInfo->name));
 
     // Outer loop to allow multiple audio sessions
     while (running) {
@@ -29,10 +43,26 @@ inline void voiceUDPServer() {
         int client_port = 0;
 
         try {
-            if (Pa_OpenDefaultStream(&stream, 0, 1, paInt16, 44100, 512, nullptr, nullptr) != paNoError) {
-                logError("Failed to open PortAudio output.");
+            // Setup output parameters explicitly
+            PaStreamParameters outputParams;
+            outputParams.device = outputDevice;
+            outputParams.channelCount = 1; // Mono
+            outputParams.sampleFormat = paInt16;
+            outputParams.suggestedLatency = deviceInfo->defaultLowOutputLatency;
+            outputParams.hostApiSpecificStreamInfo = nullptr;
+
+            if (Pa_OpenStream(&stream,
+                              nullptr, // no input
+                              &outputParams,
+                              44100,
+                              512,
+                              paNoFlag,
+                              nullptr,
+                              nullptr) != paNoError) {
+                logError("Failed to open PortAudio output stream.");
                 throw std::runtime_error("PortAudio open failed");
             }
+
             if (Pa_StartStream(stream) != paNoError) {
                 logError("Failed to start PortAudio stream.");
                 throw std::runtime_error("PortAudio start failed");
@@ -48,13 +78,14 @@ inline void voiceUDPServer() {
             servaddr.sin_family = AF_INET;
             servaddr.sin_port = htons(UDP_VOICE_PORT);
             servaddr.sin_addr.s_addr = INADDR_ANY;
+
             if (bind(sockfd, (sockaddr*)&servaddr, sizeof(servaddr)) < 0) {
                 logError("Failed to bind UDP voice socket.");
                 throw std::runtime_error("Socket bind failed");
             }
 
-            char buffer[BUFFER_SIZE]; // Use BUFFER_SIZE for consistency
-            
+            char buffer[BUFFER_SIZE];
+
             logInfo("Voice UDP server listening for clients...");
 
             while (running) {
@@ -65,49 +96,47 @@ inline void voiceUDPServer() {
                     } else {
                         logError("Error receiving UDP data: " + std::string(strerror(errno)));
                     }
-                    break; // Break from inner loop to re-listen for new client
+                    break;
                 }
 
-                // Check for stop signal from client
+                // Stop signal
                 if (bytes == strlen("STOP_AUDIO") && std::string(buffer, bytes) == "STOP_AUDIO") {
-                    if (audioActive) { // Only log if a session was active
-                        logInfo("Audio streaming ended by client: " + std::string(client_ip) + ":" + std::to_string(client_port));
+                    if (audioActive) {
+                        logInfo("Audio streaming ended by client: " +
+                                std::string(client_ip) + ":" + std::to_string(client_port));
                     } else {
-                        logInfo("Received STOP_AUDIO before session started, ignoring.");
+                        logInfo("Received STOP_AUDIO before session started.");
                     }
-                    break; // Exit inner loop, return to waiting for new client
+                    break;
                 }
 
-                // Log start when first audio packet arrives
                 if (!audioActive) {
                     inet_ntop(AF_INET, &cliaddr.sin_addr, client_ip, sizeof(client_ip));
                     client_port = ntohs(cliaddr.sin_port);
-                    logInfo("Audio streaming started from " + std::string(client_ip) + ":" + std::to_string(client_port));
+                    logInfo("Audio streaming started from " +
+                            std::string(client_ip) + ":" + std::to_string(client_port));
                     audioActive = true;
                 }
 
-                // Play audio
-                Pa_WriteStream(stream, buffer, 512); // Assuming 512 samples per buffer
+                Pa_WriteStream(stream, buffer, 512); // play received audio
             }
-        } catch (const std::exception& e) {
+        }
+        catch (const std::exception& e) {
             logError("Voice UDP server error: " + std::string(e.what()));
-        } catch (...) {
+        }
+        catch (...) {
             logError("Unknown error in Voice UDP server.");
         }
 
-        // Cleanup for the current session
-        if (sockfd != -1) {
-            close(sockfd);
-            sockfd = -1;
-        }
+        // Cleanup
+        if (sockfd != -1) close(sockfd);
         if (stream) {
             Pa_StopStream(stream);
             Pa_CloseStream(stream);
-            stream = nullptr;
         }
-        // Do NOT Pa_Terminate() here, as it's needed for subsequent sessions
     }
-    Pa_Terminate(); // Terminate PortAudio only when the server is shutting down
+
+    Pa_Terminate();
     logInfo("Voice UDP server stopped.");
 }
 
